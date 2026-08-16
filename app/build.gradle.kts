@@ -18,7 +18,7 @@ android {
     signingConfigs {
         create("persistent") {
             val keystorePath = System.getenv("GLASSWA_KEYSTORE_PATH")
-            if (keystorePath != null) {
+            if (!keystorePath.isNullOrBlank()) {
                 storeFile = file(keystorePath)
                 storePassword = System.getenv("GLASSWA_STORE_PASSWORD")
                 keyAlias = System.getenv("GLASSWA_KEY_ALIAS")
@@ -43,7 +43,14 @@ android {
         }
         debug {
             isMinifyEnabled = false
-            signingConfig = signingConfigs.getByName("persistent")
+            // Use the persistent signer when CI secrets exist; otherwise use
+            // Android's normal debug signer so UI development never gets
+            // blocked by repository-secret configuration.
+            signingConfig = if (!System.getenv("GLASSWA_KEYSTORE_PATH").isNullOrBlank()) {
+                signingConfigs.getByName("persistent")
+            } else {
+                signingConfigs.getByName("debug")
+            }
         }
     }
 }
