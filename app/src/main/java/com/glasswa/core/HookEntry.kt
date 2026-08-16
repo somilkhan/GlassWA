@@ -13,7 +13,7 @@ import de.robv.android.xposed.XposedBridge
 import de.robv.android.xposed.XposedHelpers
 import de.robv.android.xposed.callbacks.XC_LoadPackage
 
-/** First visual milestone: a reversible glass surface on WhatsApp's composer. */
+/** GlassWA visual milestones: composer + conversation toolbar. */
 class HookEntry : IXposedHookLoadPackage {
     override fun handleLoadPackage(lpparam: XC_LoadPackage.LoadPackageParam) {
         if (lpparam.packageName != TARGET_PACKAGE) return
@@ -25,40 +25,65 @@ class HookEntry : IXposedHookLoadPackage {
                 val activity = param.thisObject as? Activity ?: return
                 if (activity.javaClass.name != CONVERSATION_ACTIVITY) return
                 Handler(Looper.getMainLooper()).postDelayed({
-                    if (!activity.isFinishing && !activity.isDestroyed) applyComposerGlass(activity)
+                    if (!activity.isFinishing && !activity.isDestroyed) applyGlassSurfaces(activity)
                 }, 800L)
             }
         })
     }
 
-    private fun applyComposerGlass(activity: Activity) {
+    private fun applyGlassSurfaces(activity: Activity) {
         try {
             val root = activity.window?.decorView ?: return
-            val footer = findByName(root, "com.whatsapp:id/footer") ?: return
-            val editLayout = findByName(root, "com.whatsapp:id/edit_layout") ?: return
-            footer.setBackgroundColor(Color.TRANSPARENT)
-            editLayout.background = glassDrawable()
-            editLayout.elevation = 4f * editLayout.resources.displayMetrics.density
-            editLayout.clipToOutline = true
-            editLayout.outlineProvider = android.view.ViewOutlineProvider.BACKGROUND
-            XposedBridge.log("GlassWA: composer glass applied")
+            val footer = findByName(root, "com.whatsapp:id/footer")
+            val editLayout = findByName(root, "com.whatsapp:id/edit_layout")
+            val toolbar = findByName(root, "com.whatsapp:id/toolbar")
+
+            footer?.setBackgroundColor(Color.TRANSPARENT)
+
+            editLayout?.let {
+                it.background = composerGlassDrawable()
+                it.elevation = 4f * it.resources.displayMetrics.density
+                it.clipToOutline = true
+                it.outlineProvider = android.view.ViewOutlineProvider.BACKGROUND
+            }
+
+            toolbar?.let {
+                it.background = toolbarGlassDrawable()
+                it.elevation = 3f * it.resources.displayMetrics.density
+            }
+
+            XposedBridge.log(
+                "GlassWA: glass applied composer=${editLayout != null} toolbar=${toolbar != null}"
+            )
         } catch (t: Throwable) {
-            XposedBridge.log("GlassWA: composer glass failed: ${t.javaClass.simpleName}: ${t.message}")
+            XposedBridge.log("GlassWA: glass failed: ${t.javaClass.simpleName}: ${t.message}")
         }
     }
 
-    private fun glassDrawable() = GradientDrawable().apply {
+    private fun composerGlassDrawable() = GradientDrawable().apply {
         shape = GradientDrawable.RECTANGLE
         cornerRadius = 28f
         setColor(Color.argb(150, 255, 255, 255))
         setStroke(1, Color.argb(90, 255, 255, 255))
     }
 
+    private fun toolbarGlassDrawable() = GradientDrawable().apply {
+        shape = GradientDrawable.RECTANGLE
+        setColor(Color.argb(120, 18, 18, 18))
+        setStroke(1, Color.argb(55, 255, 255, 255))
+    }
+
     private fun findByName(root: View, resourceName: String): View? {
         if (root.id != View.NO_ID) {
-            try { if (root.resources.getResourceName(root.id) == resourceName) return root } catch (_: Throwable) { }
+            try {
+                if (root.resources.getResourceName(root.id) == resourceName) return root
+            } catch (_: Throwable) { }
         }
-        if (root is ViewGroup) for (i in 0 until root.childCount) findByName(root.getChildAt(i), resourceName)?.let { return it }
+        if (root is ViewGroup) {
+            for (i in 0 until root.childCount) {
+                findByName(root.getChildAt(i), resourceName)?.let { return it }
+            }
+        }
         return null
     }
 
