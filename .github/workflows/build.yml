@@ -21,8 +21,19 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.10.2'
+      - name: Prepare persistent signing key
+        env:
+          KEYSTORE_B64: ${{ secrets.GLASSWA_KEYSTORE_B64 }}
+        run: |
+          test -n "$KEYSTORE_B64"
+          printf '%s' "$KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/glasswa-release.jks"
       - name: Clean build
-        run: gradle clean :app:assembleDebug --no-build-cache
+        env:
+          GLASSWA_KEYSTORE_PATH: ${{ runner.temp }}/glasswa-release.jks
+          GLASSWA_STORE_PASSWORD: ${{ secrets.GLASSWA_STORE_PASSWORD }}
+          GLASSWA_KEY_ALIAS: ${{ secrets.GLASSWA_KEY_ALIAS }}
+          GLASSWA_KEY_PASSWORD: ${{ secrets.GLASSWA_KEY_PASSWORD }}
+        run: gradle clean :app:assembleDebug --no-build-cache -PbuildVersionCode=${{ github.run_number }}
       - name: Verify Xposed entrypoint
         run: |
           test "$(unzip -p app/build/outputs/apk/debug/app-debug.apk assets/xposed_init)" = "com.glasswa.core.HookEntry"
