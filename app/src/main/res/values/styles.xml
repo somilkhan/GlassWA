@@ -1,0 +1,7 @@
+<resources>
+    <style name="Theme.GlassWA" parent="android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:colorAccent">#8FA8FF</item>
+    </style>
+</resources>
