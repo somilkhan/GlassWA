@@ -21,15 +21,15 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.10.2'
-      - name: Prepare persistent signing key
+      - name: Prepare persistent signing key (when configured)
+        if: ${{ secrets.GLASSWA_KEYSTORE_B64 != '' }}
         env:
           KEYSTORE_B64: ${{ secrets.GLASSWA_KEYSTORE_B64 }}
         run: |
-          test -n "$KEYSTORE_B64"
           printf '%s' "$KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/glasswa-release.jks"
       - name: Clean build
         env:
-          GLASSWA_KEYSTORE_PATH: ${{ runner.temp }}/glasswa-release.jks
+          GLASSWA_KEYSTORE_PATH: ${{ secrets.GLASSWA_KEYSTORE_B64 != '' && format('{0}/glasswa-release.jks', runner.temp) || '' }}
           GLASSWA_STORE_PASSWORD: ${{ secrets.GLASSWA_STORE_PASSWORD }}
           GLASSWA_KEY_ALIAS: ${{ secrets.GLASSWA_KEY_ALIAS }}
           GLASSWA_KEY_PASSWORD: ${{ secrets.GLASSWA_KEY_PASSWORD }}
