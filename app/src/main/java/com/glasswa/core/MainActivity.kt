@@ -1,4 +1,4 @@
-package com.glasswa
+package com.glasswa.core
 
 import android.os.Bundle
 import android.widget.TextView
