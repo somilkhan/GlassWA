@@ -1,0 +1,12 @@
+{
+  "packageName": "com.whatsapp",
+  "versionName": "2.26.31.77",
+  "versionCode": 263107700,
+  "status": "unmapped",
+  "targets": {
+    "composer": null,
+    "messageBubble": null,
+    "chatHeader": null,
+    "bottomNavigation": null
+  }
+}
