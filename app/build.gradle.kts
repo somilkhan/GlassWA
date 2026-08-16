@@ -11,8 +11,20 @@ android {
         applicationId = "com.glasswa"
         minSdk = 27
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0-dev"
+        versionCode = (project.findProperty("buildVersionCode") as String?)?.toInt() ?: 1
+        versionName = "0.1.${project.findProperty("buildVersionCode") ?: "dev"}"
+    }
+
+    signingConfigs {
+        create("persistent") {
+            val keystorePath = System.getenv("GLASSWA_KEYSTORE_PATH")
+            if (keystorePath != null) {
+                storeFile = file(keystorePath)
+                storePassword = System.getenv("GLASSWA_STORE_PASSWORD")
+                keyAlias = System.getenv("GLASSWA_KEY_ALIAS")
+                keyPassword = System.getenv("GLASSWA_KEY_PASSWORD")
+            }
+        }
     }
 
     compileOptions {
@@ -25,8 +37,14 @@ android {
     }
 
     buildTypes {
-        release { isMinifyEnabled = false }
-        debug { isMinifyEnabled = false }
+        release {
+            isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName("persistent")
+        }
+        debug {
+            isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName("persistent")
+        }
     }
 }
 
