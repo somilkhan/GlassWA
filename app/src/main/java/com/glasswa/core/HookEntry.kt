@@ -2,8 +2,8 @@ package com.glasswa.core
 
 import android.app.Activity
 import android.graphics.Color
+import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
-import android.os.Handler
 import android.view.View
 import android.view.ViewGroup
 import android.widget.TextView
@@ -14,173 +14,119 @@ import de.robv.android.xposed.XposedHelpers
 import de.robv.android.xposed.callbacks.XC_LoadPackage
 
 class HookEntry : IXposedHookLoadPackage {
-    override fun handleLoadPackage(lpparam: XC_LoadPackage.LoadPackageParam) {
-        if (lpparam.packageName != TARGET_PACKAGE) return
-        XposedBridge.log("GlassWA: attached to $TARGET_PACKAGE")
+    override fun handleLoadPackage(p: XC_LoadPackage.LoadPackageParam) {
+        if (p.packageName != WA) return
+        XposedBridge.log("GlassWA: attached to $WA")
         XposedHelpers.findAndHookMethod(Activity::class.java, "onResume", object : XC_MethodHook() {
             override fun afterHookedMethod(param: MethodHookParam) {
-                val activity = param.thisObject as? Activity ?: return
-                when (activity.javaClass.name) {
-                    CONVERSATION_ACTIVITY -> schedule(activity, false)
-                    HOME_ACTIVITY -> schedule(activity, true)
+                val a = param.thisObject as? Activity ?: return
+                when (a.javaClass.name) {
+                    CONVERSATION -> schedule(a, false)
+                    HOME -> schedule(a, true)
                 }
             }
         })
     }
 
-    private fun schedule(activity: Activity, home: Boolean) {
-        Handler(activity.mainLooper).postDelayed({
-            if (!activity.isFinishing && !activity.isDestroyed) {
-                if (home) applyHome(activity) else applyConversation(activity)
-            }
-        }, 350L)
-        Handler(activity.mainLooper).postDelayed({
-            if (!activity.isFinishing && !activity.isDestroyed) {
-                if (home) applyHome(activity) else applyConversation(activity)
-            }
-        }, 1200L)
+    private fun schedule(a: Activity, home: Boolean) {
+        android.os.Handler(a.mainLooper).postDelayed({
+            if (!a.isFinishing && !a.isDestroyed) if (home) applyHome(a) else applyConversation(a)
+        }, 500L)
     }
 
-    private fun applyConversation(activity: Activity) {
+    private fun applyConversation(a: Activity) {
         try {
-            val root = activity.window?.decorView ?: return
-            windowTheme(activity)
-            root.setBackgroundColor(AMOLED)
-            val conversation = find(root, "com.whatsapp:id/conversation_root_layout") ?: root
-            find(root, "com.whatsapp:id/toolbar")?.let { glassOnce(it, toolbarGlass(), TAG_TOOLBAR) }
-            find(root, "com.whatsapp:id/footer")?.setBackgroundColor(Color.TRANSPARENT)
-            find(root, "com.whatsapp:id/edit_layout")?.let { glassOnce(it, composerGlass(), TAG_COMPOSER) }
-            find(root, "com.whatsapp:id/text_entry_layout")?.let { input ->
-                if (input !== find(root, "com.whatsapp:id/edit_layout")) glassOnce(input, innerGlass(), TAG_INPUT)
+            val root = a.window.decorView
+            a.window.statusBarColor = BLACK
+            a.window.navigationBarColor = BLACK
+            root.setBackgroundColor(BLACK)
+            val r = find(root, "com.whatsapp:id/conversation_root_layout") ?: root
+            find(root, "com.whatsapp:id/toolbar")?.let { once(it, toolbar(), TAG_TOOLBAR) }
+            find(root, "com.whatsapp:id/footer")?.let { once(it, transparent(), TAG_FOOTER) }
+            find(root, "com.whatsapp:id/edit_layout")?.let { once(it, composer(), TAG_COMPOSER) }
+            find(root, "com.whatsapp:id/text_entry_layout")?.let { once(it, inputSurface(), TAG_INPUT) }
+            var bubbles = 0; var media = 0; var labels = 0; var text = 0
+            walk(r) { v ->
+                if (v.visibility != View.VISIBLE || v.width <= 0 || v.height <= 0) return@walk
+                val id = resource(v); val cls = v.javaClass.name
+                when {
+                    id == "com.whatsapp:id/conversation_text_row" && v.getTag(TAG_BUBBLE) != true -> { styleBubble(v); v.setTag(TAG_BUBBLE, true); bubbles++ }
+                    id == "com.whatsapp:id/media_container" && v.getTag(TAG_MEDIA) != true -> { v.background = media(); v.setTag(TAG_MEDIA, true); media++ }
+                    v is TextView && isConversationText(cls, id) -> { styleConversationText(v); text++ }
+                    v is TextView && (v.text?.toString()?.trim()?.equals("today", true) == true || v.text?.toString()?.trim()?.equals("yesterday", true) == true) -> {
+                        (v.parent as? View)?.let { if (it.width > 0 && it.height > 0) { it.background = dateChip(); labels++ } }
+                    }
+                }
             }
-            val bubbles = styleMessageRows(conversation)
-            val media = styleMediaRows(conversation)
-            val labels = styleLabels(conversation)
-            val sheets = styleAttachmentSheets(root)
-            XposedBridge.log("GlassWA: AMOLED conversation bubbles=$bubbles media=$media labels=$labels sheets=$sheets")
-        } catch (t: Throwable) {
-            XposedBridge.log("GlassWA: conversation failed ${t.javaClass.simpleName}: ${t.message}")
-        }
+            XposedBridge.log("GlassWA: conversation redesign bubbles=$bubbles media=$media labels=$labels text=$text")
+        } catch (t: Throwable) { XposedBridge.log("GlassWA: conversation failed ${t.javaClass.simpleName}: ${t.message}") }
     }
 
-    private fun applyHome(activity: Activity) {
+    private fun applyHome(a: Activity) {
         try {
-            val root = activity.window?.decorView ?: return
-            windowTheme(activity)
-            root.setBackgroundColor(AMOLED)
+            val root = a.window.decorView
+            a.window.statusBarColor = BLACK; a.window.navigationBarColor = BLACK; root.setBackgroundColor(BLACK)
             val main = find(root, "com.whatsapp:id/main_container") ?: root
-            find(root, "com.whatsapp:id/navigation_bar_protection")?.setBackgroundColor(AMOLED)
-            XposedBridge.log("GlassWA: AMOLED home glass_surfaces=${styleHomeSurfaces(main)}")
-        } catch (t: Throwable) {
-            XposedBridge.log("GlassWA: home failed ${t.javaClass.simpleName}: ${t.message}")
-        }
+            var rows = 0; var surfaces = 0
+            walk(main) { v ->
+                if (v.visibility != View.VISIBLE || v.width <= 0 || v.height <= 0) return@walk
+                val cls = v.javaClass.name.lowercase()
+                if ((cls.contains("wdslistitemconversation") || cls.contains("conversationrow")) && v.getTag(TAG_ROW) != true) {
+                    v.background = listRow(); v.setTag(TAG_ROW, true); rows++
+                }
+                if (v is TextView) styleHomeText(v, cls)
+                val role = when {
+                    cls.contains("wdstoolbar") -> ROLE_TOOLBAR
+                    cls.contains("searchview") || cls.contains("conversationsearchview") -> ROLE_SEARCH
+                    cls.contains("navigationrail") || cls.contains("bottomnavigation") || cls.contains("tabbar") -> ROLE_NAV
+                    else -> 0
+                }
+                if (role != 0 && v.getTag(TAG_HOME) != true) {
+                    v.background = when (role) { ROLE_SEARCH -> searchSurface(); ROLE_NAV -> navigationSurface(); else -> homeToolbar() }
+                    v.elevation = if (role == ROLE_NAV) dp(v, 5f) else dp(v, 2f)
+                    v.setTag(TAG_HOME, true); surfaces++
+                }
+            }
+            XposedBridge.log("GlassWA: HOME redesign rows=$rows glass=$surfaces")
+        } catch (t: Throwable) { XposedBridge.log("GlassWA: home failed ${t.javaClass.simpleName}: ${t.message}") }
     }
 
-    private fun windowTheme(activity: Activity) {
-        activity.window?.let { it.statusBarColor = AMOLED; it.navigationBarColor = AMOLED }
+    private fun styleBubble(v: View) {
+        val p = IntArray(2); v.getLocationOnScreen(p); val w = v.resources.displayMetrics.widthPixels
+        val outgoing = p[0] + v.width > w * .92f || p[0] > w * .40f
+        v.background = if (outgoing) outgoingBubble() else incomingBubble(); v.elevation = dp(v, 1.5f); v.invalidate()
     }
-
-    private fun styleMessageRows(root: View): Int {
-        var count = 0
-        walk(root) { view ->
-            if (view.getTag(TAG_BUBBLE) == true || view.visibility != View.VISIBLE || view.width <= 0) return@walk
-            if (resource(view) != "com.whatsapp:id/conversation_text_row") return@walk
-            val p = IntArray(2); view.getLocationOnScreen(p)
-            val outgoing = p[0] + view.width / 2f > view.resources.displayMetrics.widthPixels * 0.52f
-            view.background = bubble(outgoing)
-            view.elevation = 1.5f * view.resources.displayMetrics.density
-            view.setTag(TAG_BUBBLE, true); view.invalidate(); count++
-        }
-        return count
+    private fun styleConversationText(v: TextView) { v.setTextColor(TEXT); v.setHintTextColor(SECONDARY); v.typeface = Typeface.create("sans", Typeface.NORMAL) }
+    private fun styleHomeText(v: TextView, cls: String) {
+        val s = v.text?.toString()?.trim().orEmpty()
+        if (s.isEmpty()) return
+        v.setTextColor(if (cls.contains("secondary") || cls.contains("preview") || cls.contains("status") || v.textSize < 14f) SECONDARY else TEXT)
     }
+    private fun isConversationText(cls: String, id: String) = id.contains("message_text") || id.contains("date") || cls.contains("wdsrichtextview") || cls.contains("wdstextview")
+    private fun once(v: View, d: android.graphics.drawable.Drawable, tag: Int) { if (v.getTag(tag) != true) { v.background = d; v.setTag(tag, true); v.invalidate() } }
+    private fun find(root: View, id: String): View? { var result: View? = null; walk(root) { if (result == null && resource(it) == id) result = it }; return result }
+    private fun resource(v: View) = if (v.id == View.NO_ID) "" else try { v.resources.getResourceName(v.id) } catch (_: Throwable) { "" }
+    private fun dp(v: View, n: Float) = n * v.resources.displayMetrics.density
+    private fun walk(root: View, action: (View) -> Unit) { action(root); if (root is ViewGroup) for (i in 0 until root.childCount) walk(root.getChildAt(i), action) }
 
-    private fun styleMediaRows(root: View): Int {
-        var count = 0
-        walk(root) { view ->
-            if (view.getTag(TAG_MEDIA) == true) return@walk
-            val id = resource(view)
-            if (id != "com.whatsapp:id/media_container" && id != "com.whatsapp:id/text_and_date") return@walk
-            if (view.width <= 0 || view.height <= 0) return@walk
-            view.background = mediaSurface(); view.setTag(TAG_MEDIA, true); count++
-        }
-        return count
-    }
-
-    private fun styleLabels(root: View): Int {
-        var count = 0
-        walk(root) { view ->
-            val text = view as? TextView ?: return@walk
-            if (text.getTag(TAG_LABEL) == true) return@walk
-            val value = text.text?.toString()?.trim()?.lowercase() ?: return@walk
-            if (value != "today" && value != "yesterday") return@walk
-            val parent = text.parent as? ViewGroup ?: return@walk
-            if (parent.width <= 0 || parent.height <= 0 || parent.height > text.resources.displayMetrics.density * 160) return@walk
-            parent.background = chip(); parent.setTag(TAG_LABEL, true); count++
-        }
-        return count
-    }
-
-    private fun styleAttachmentSheets(root: View): Int {
-        var count = 0
-        walk(root) { view ->
-            if (view.getTag(TAG_SHEET) == true) return@walk
-            val group = view as? ViewGroup ?: return@walk
-            val h = root.resources.displayMetrics.heightPixels.toFloat()
-            val w = root.resources.displayMetrics.widthPixels.toFloat()
-            if (group.visibility != View.VISIBLE || group.width < w * .82f || group.height < h * .20f || group.height > h * .72f || group.top < h * .40f) return@walk
-            val name = group.javaClass.name.lowercase(); val res = resource(group).lowercase()
-            if (!(name.contains("bottomsheet") || name.contains("attachmentsheet") || name.contains("gallerypicker") || res.contains("bottom_sheet") || res.contains("attachment") || res.contains("media_picker"))) return@walk
-            group.background = attachmentGlass(); group.elevation = 8f * root.resources.displayMetrics.density; group.setTag(TAG_SHEET, true); count++
-        }
-        return count
-    }
-
-    private fun styleHomeSurfaces(root: View): Int {
-        var count = 0
-        walk(root) { view ->
-            if (view.getTag(TAG_HOME_SURFACE) == true || view.visibility != View.VISIBLE || view.width <= 0 || view.height <= 0) return@walk
-            val name = view.javaClass.name.lowercase(); val res = resource(view).lowercase()
-            val toolbar = name.contains("wdstoolbar") || name.contains("topbar") || res.contains("toolbar")
-            val search = name.contains("searchview") || name.contains("search_view")
-            val navigation = name.contains("bottomnavigation") || name.contains("navigationrail") || name.contains("navigationbar") || name.contains("tabbar") || res.contains("bottom_navigation") || res.contains("navigation_rail")
-            if (!toolbar && !search && !navigation) return@walk
-            if (res.contains("navigation_bar_protection")) return@walk
-            view.background = if (navigation) homeNavigationGlass() else homeSurfaceGlass()
-            view.elevation = if (navigation) 5f * root.resources.displayMetrics.density else 3f * root.resources.displayMetrics.density
-            view.setTag(TAG_HOME_SURFACE, true); count++
-        }
-        return count
-    }
-
-    private fun glassOnce(view: View, drawable: GradientDrawable, tag: Int) {
-        if (view.getTag(tag) == true) return
-        view.background = drawable; view.setTag(tag, true); view.invalidate()
-    }
-    private fun toolbarGlass() = GradientDrawable().apply { shape=GradientDrawable.RECTANGLE; colors=intArrayOf(Color.argb(235,8,8,10),Color.argb(220,40,5,23)); orientation=GradientDrawable.Orientation.TOP_BOTTOM; setStroke(1,Color.argb(55,170,45,92)) }
-    private fun composerGlass() = GradientDrawable().apply { shape=GradientDrawable.RECTANGLE; cornerRadius=34f; colors=intArrayOf(Color.argb(230,10,10,12),Color.argb(215,55,7,30)); orientation=GradientDrawable.Orientation.TL_BR; setStroke(1,Color.argb(70,174,45,96)) }
-    private fun innerGlass() = GradientDrawable().apply { shape=GradientDrawable.RECTANGLE; cornerRadius=28f; setColor(Color.argb(28,255,255,255)) }
-    private fun bubble(outgoing:Boolean) = GradientDrawable().apply { shape=GradientDrawable.RECTANGLE; cornerRadius=20f; setColor(if(outgoing) Color.rgb(82,10,41) else Color.rgb(20,20,23)); setStroke(1,Color.argb(if(outgoing) 80 else 45,184,42,101)) }
-    private fun mediaSurface() = GradientDrawable().apply { shape=GradientDrawable.RECTANGLE; cornerRadius=18f; setColor(Color.rgb(18,18,21)); setStroke(1,Color.argb(45,132,34,73)) }
-    private fun chip() = GradientDrawable().apply { shape=GradientDrawable.RECTANGLE; cornerRadius=28f; setColor(Color.rgb(28,8,18)); setStroke(1,Color.argb(75,170,43,94)) }
-    private fun attachmentGlass() = GradientDrawable().apply { shape=GradientDrawable.RECTANGLE; cornerRadii=floatArrayOf(28f,28f,28f,28f,0f,0f,0f,0f); colors=intArrayOf(Color.argb(242,10,10,12),Color.argb(242,38,6,22)); orientation=GradientDrawable.Orientation.TOP_BOTTOM; setStroke(1,Color.argb(70,167,42,91)) }
-    private fun homeSurfaceGlass() = GradientDrawable().apply { shape=GradientDrawable.RECTANGLE; colors=intArrayOf(Color.argb(238,8,8,10),Color.argb(228,42,6,24)); orientation=GradientDrawable.Orientation.TOP_BOTTOM; setStroke(1,Color.argb(55,160,38,86)) }
-    private fun homeNavigationGlass() = GradientDrawable().apply { shape=GradientDrawable.RECTANGLE; colors=intArrayOf(Color.argb(238,8,8,10),Color.argb(230,55,8,31)); orientation=GradientDrawable.Orientation.TOP_BOTTOM; setStroke(1,Color.argb(70,178,42,96)) }
-
-    private fun find(root: View, idName: String): View? { var result: View? = null; walk(root) { view -> if(result==null && resource(view)==idName) result=view }; return result }
-    private fun resource(view: View): String { if(view.id==View.NO_ID)return ""; return try{view.resources.getResourceName(view.id)}catch(_:Throwable){""} }
-
-    private fun walk(root: View, action: (View) -> Unit) {
-        action(root)
-        if (root is ViewGroup) for (i in 0 until root.childCount) walk(root.getChildAt(i), action)
-    }
+    private fun toolbar() = rounded(18f, intArrayOf(Color.argb(245, 6, 6, 8), Color.argb(238, 45, 5, 25)), BORDER)
+    private fun homeToolbar() = rounded(0f, intArrayOf(Color.BLACK, Color.argb(232, 27, 3, 15)), BORDER)
+    private fun searchSurface() = rounded(26f, intArrayOf(Color.argb(230, 15, 15, 17), Color.argb(220, 43, 7, 25)), BORDER)
+    private fun navigationSurface() = rounded(24f, intArrayOf(Color.argb(242, 8, 8, 10), Color.argb(232, 46, 6, 26)), Color.argb(75, 185, 45, 100))
+    private fun composer() = rounded(32f, intArrayOf(Color.argb(238, 10, 10, 12), Color.argb(220, 58, 7, 32)), Color.argb(85, 185, 45, 100))
+    private fun inputSurface() = rounded(27f, intArrayOf(Color.argb(35, 255, 255, 255), Color.argb(20, 130, 20, 70)), Color.argb(40, 185, 45, 100))
+    private fun outgoingBubble() = rounded(20f, intArrayOf(Color.rgb(92, 10, 46), Color.rgb(66, 7, 35)), Color.argb(105, 194, 49, 108))
+    private fun incomingBubble() = rounded(20f, intArrayOf(Color.rgb(24, 24, 27), Color.rgb(18, 18, 21)), Color.argb(48, 145, 40, 82))
+    private fun listRow() = rounded(18f, intArrayOf(Color.BLACK, Color.rgb(8, 8, 10)), Color.argb(28, 160, 35, 80))
+    private fun media() = rounded(18f, intArrayOf(Color.rgb(20, 20, 23), Color.rgb(13, 13, 16)), Color.argb(55, 155, 38, 84))
+    private fun dateChip() = rounded(20f, intArrayOf(Color.rgb(29, 7, 19), Color.rgb(20, 5, 14)), Color.argb(80, 185, 45, 100))
+    private fun transparent() = android.graphics.ColorDrawable(Color.TRANSPARENT)
+    private fun rounded(r: Float, colors: IntArray, stroke: Int) = GradientDrawable().apply { shape = GradientDrawable.RECTANGLE; cornerRadius = r; this.colors = colors; orientation = GradientDrawable.Orientation.TL_BR; setStroke(1, stroke) }
 
     companion object {
-        private const val TARGET_PACKAGE="com.whatsapp"
-        private const val CONVERSATION_ACTIVITY="com.whatsapp.Conversation"
-        private const val HOME_ACTIVITY="com.whatsapp.home.ui.HomeActivity"
-        private const val TAG_TOOLBAR=0x47570002; private const val TAG_COMPOSER=0x47570003; private const val TAG_INPUT=0x47570004
-        private const val TAG_BUBBLE=0x47570005; private const val TAG_MEDIA=0x47570006; private const val TAG_LABEL=0x47570007
-        private const val TAG_SHEET=0x47570008; private const val TAG_HOME_SURFACE=0x47570009
-        private const val AMOLED=Color.BLACK
+        private const val WA = "com.whatsapp"; private const val CONVERSATION = "com.whatsapp.Conversation"; private const val HOME = "com.whatsapp.home.ui.HomeActivity"
+        private const val BLACK = Color.BLACK; private const val TEXT = Color.rgb(245, 242, 245); private const val SECONDARY = Color.rgb(164, 156, 164); private const val BORDER = Color.argb(60, 170, 42, 92)
+        private const val TAG_TOOLBAR = 0x47571001; private const val TAG_FOOTER = 0x47571002; private const val TAG_COMPOSER = 0x47571003; private const val TAG_INPUT = 0x47571004; private const val TAG_BUBBLE = 0x47571005; private const val TAG_MEDIA = 0x47571006; private const val TAG_ROW = 0x47571007; private const val TAG_HOME = 0x47571008
+        private const val ROLE_TOOLBAR = 1; private const val ROLE_SEARCH = 2; private const val ROLE_NAV = 3
     }
 }
