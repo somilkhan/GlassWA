@@ -26,8 +26,15 @@ jobs:
       - name: Verify Xposed entrypoint
         run: |
           test "$(unzip -p app/build/outputs/apk/debug/app-debug.apk assets/xposed_init)" = "com.glasswa.core.HookEntry"
-          unzip -p app/build/outputs/apk/debug/app-debug.apk classes.dex > /tmp/classes.dex
-          strings /tmp/classes.dex | grep -q 'Lcom/glasswa/core/HookEntry;'
+          unzip -q app/build/outputs/apk/debug/app-debug.apk -d /tmp/glasswa-apk
+          found=0
+          for dex in /tmp/glasswa-apk/classes*.dex; do
+            if strings "$dex" | grep -Fq 'com/glasswa/core/HookEntry'; then
+              found=1
+              break
+            fi
+          done
+          test "$found" = 1
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
