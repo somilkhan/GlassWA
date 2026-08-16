@@ -1,6 +1,8 @@
 package com.glasswa.core
 
 import android.app.Activity
+import android.os.Handler
+import android.os.Looper
 import android.view.View
 import android.view.ViewGroup
 import de.robv.android.xposed.IXposedHookLoadPackage
@@ -9,7 +11,7 @@ import de.robv.android.xposed.XposedBridge
 import de.robv.android.xposed.XposedHelpers
 import de.robv.android.xposed.callbacks.XC_LoadPackage
 
-/** First milestone: discover WhatsApp's live UI tree without mutating it. */
+/** Diagnostic milestone: capture the fully inflated WhatsApp Conversation UI tree. */
 class HookEntry : IXposedHookLoadPackage {
     override fun handleLoadPackage(lpparam: XC_LoadPackage.LoadPackageParam) {
         if (lpparam.packageName != TARGET_PACKAGE) return
@@ -22,7 +24,14 @@ class HookEntry : IXposedHookLoadPackage {
             object : XC_MethodHook() {
                 override fun afterHookedMethod(param: MethodHookParam) {
                     val activity = param.thisObject as? Activity ?: return
-                    dumpTree(activity.window?.decorView, 0, activity.javaClass.name)
+                    Handler(Looper.getMainLooper()).postDelayed({
+                        if (!activity.isFinishing && !activity.isDestroyed) {
+                            if (activity.javaClass.name == CONVERSATION_ACTIVITY) {
+                                XposedBridge.log("GlassWA: dumping Conversation tree")
+                                dumpTree(activity.window?.decorView, 0, activity.javaClass.name)
+                            }
+                        }
+                    }, 1500L)
                 }
             }
         )
@@ -36,13 +45,16 @@ class HookEntry : IXposedHookLoadPackage {
         } else "-"
         XposedBridge.log("GlassWA:UI $activityName $indent${view.javaClass.name} id=$id")
         if (view is ViewGroup) {
-            for (i in 0 until view.childCount) dumpTree(view.getChildAt(i), depth + 1, activityName)
+            for (i in 0 until view.childCount) {
+                dumpTree(view.getChildAt(i), depth + 1, activityName)
+            }
         }
     }
 
     companion object {
         const val TARGET_PACKAGE = "com.whatsapp"
-        const val MAX_DEPTH = 8
+        const val CONVERSATION_ACTIVITY = "com.whatsapp.Conversation"
+        const val MAX_DEPTH = 20
         @Volatile var isLoaded: Boolean = false
     }
 }
