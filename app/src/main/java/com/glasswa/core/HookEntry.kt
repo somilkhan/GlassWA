@@ -11,6 +11,7 @@ import android.os.Looper
 import android.view.View
 import android.view.ViewGroup
 import android.view.ViewOutlineProvider
+import android.widget.TextView
 import de.robv.android.xposed.IXposedHookLoadPackage
 import de.robv.android.xposed.XC_MethodHook
 import de.robv.android.xposed.XposedBridge
@@ -18,102 +19,88 @@ import de.robv.android.xposed.XposedHelpers
 import de.robv.android.xposed.callbacks.XC_LoadPackage
 
 /**
- * GlassWA conversation redesign.
+ * GlassWA — cohesive Conversation-page presentation layer.
  *
- * The module intentionally changes only presentation properties: backgrounds,
- * elevation, clipping, window bars and supported RenderEffects. No click,
- * input, adapter, message or networking behavior is replaced.
+ * This module does not replace WhatsApp behavior. It only changes view
+ * presentation: backgrounds, blur, elevation, clipping and system bars.
  */
 class HookEntry : IXposedHookLoadPackage {
-    private val mainHandler = Handler(Looper.getMainLooper())
+    private val handler = Handler(Looper.getMainLooper())
 
     override fun handleLoadPackage(lpparam: XC_LoadPackage.LoadPackageParam) {
         if (lpparam.packageName != TARGET_PACKAGE) return
-        isLoaded = true
         XposedBridge.log("GlassWA: attached to $TARGET_PACKAGE")
 
         XposedHelpers.findAndHookMethod(Activity::class.java, "onResume", object : XC_MethodHook() {
             override fun afterHookedMethod(param: MethodHookParam) {
                 val activity = param.thisObject as? Activity ?: return
                 if (activity.javaClass.name != CONVERSATION_ACTIVITY) return
-                scheduleConversationRefresh(activity)
+                schedule(activity)
             }
         })
     }
 
-    private fun scheduleConversationRefresh(activity: Activity) {
-        // WhatsApp inflates parts of Conversation through ViewStubs after resume.
-        // A short bounded refresh window catches those views without keeping a
-        // permanent polling loop alive.
-        val delays = longArrayOf(350L, 900L, 1600L, 2800L, 4500L)
-        delays.forEach { delay ->
-            mainHandler.postDelayed({
-                if (!activity.isFinishing && !activity.isDestroyed) {
-                    applyConversationGlass(activity)
-                }
+    private fun schedule(activity: Activity) {
+        // WhatsApp inflates the conversation footer, media sheet and message
+        // rows asynchronously. A finite refresh window catches those states
+        // without leaving a polling loop running forever.
+        longArrayOf(250L, 700L, 1400L, 2400L, 4000L).forEach { delay ->
+            handler.postDelayed({
+                if (!activity.isFinishing && !activity.isDestroyed) applyConversation(activity)
             }, delay)
         }
     }
 
-    private fun applyConversationGlass(activity: Activity) {
+    private fun applyConversation(activity: Activity) {
         try {
             val root = activity.window?.decorView ?: return
             val density = root.resources.displayMetrics.density
-
             styleWindow(activity)
 
-            val conversationRoot = findByName(root, "com.whatsapp:id/conversation_root_layout")
+            val conversation = findByName(root, "com.whatsapp:id/conversation_root_layout") ?: root
             val wallpaper = findByName(root, "com.whatsapp:id/conversation_background")
             val toolbar = findByName(root, "com.whatsapp:id/toolbar")
-            val coordinator = findByName(root, "com.whatsapp:id/coordinator")
             val footer = findByName(root, "com.whatsapp:id/footer")
             val editLayout = findByName(root, "com.whatsapp:id/edit_layout")
             val inputLayout = findByName(root, "com.whatsapp:id/text_entry_layout")
+            val keyboardLayout = findByName(root, "com.whatsapp:id/conversation_layout")
 
-            // Keep the actual wallpaper visible, but soften it so translucent
-            // foreground surfaces read as glass instead of flat gray cards.
             wallpaper?.let { styleWallpaper(it) }
-
-            toolbar?.let {
-                applySurface(it, toolbarGlassDrawable(), 2.5f, density)
-                it.setTag(TAG_TOOLBAR, true)
-            }
+            toolbar?.let { glassSurface(it, toolbarDrawable(), 0f, density, TAG_TOOLBAR) }
 
             footer?.let {
-                it.setBackgroundColor(Color.TRANSPARENT)
-                it.setTag(TAG_STYLED, true)
-            }
-
-            editLayout?.let {
-                applySurface(it, composerGlassDrawable(), 5f, density)
-                it.setTag(TAG_COMPOSER, true)
-            }
-
-            inputLayout?.let {
-                // Only add a subtle inner glass layer when this container is
-                // separate from edit_layout; input behavior remains untouched.
-                if (it !== editLayout) {
-                    applySurface(it, innerGlassDrawable(), 0f, density)
+                // The footer itself stays transparent; the inner composer is
+                // the glass capsule. This prevents a gray rectangle around it.
+                if (it.getTag(TAG_FOOTER) != true) {
+                    it.setBackgroundColor(Color.TRANSPARENT)
+                    it.setTag(TAG_FOOTER, true)
                 }
             }
 
-            // Style only views whose runtime class strongly indicates a bubble.
-            // This avoids guessing resource IDs in WhatsApp's obfuscated WDS tree.
-            val bubbleCount = styleBubbleCandidates(conversationRoot ?: root, density)
-
-            // A very light tint on the conversation container prevents the
-            // wallpaper from overpowering text while preserving its pattern.
-            conversationRoot?.let {
-                if (it.background == null) it.background = conversationWashDrawable()
+            editLayout?.let { glassSurface(it, composerDrawable(), 0f, density, TAG_COMPOSER) }
+            inputLayout?.let {
+                if (it !== editLayout) glassSurface(it, innerDrawable(), 0f, density, TAG_INPUT)
             }
 
+            // The keyboard/conversation container remains behaviorally intact,
+            // but gets a transparent base so our surfaces can float over it.
+            keyboardLayout?.let {
+                if (it.getTag(TAG_LAYOUT) != true) {
+                    it.setBackgroundColor(Color.TRANSPARENT)
+                    it.setTag(TAG_LAYOUT, true)
+                }
+            }
+
+            val bubbles = styleBubbleCandidates(conversation, density)
+            val sheets = styleBottomSheets(conversation, density)
+            val chips = styleConversationLabels(conversation, density)
+
             XposedBridge.log(
-                "GlassWA: conversation glass applied " +
-                    "toolbar=${toolbar != null} wallpaper=${wallpaper != null} " +
-                    "composer=${editLayout != null} bubbles=$bubbleCount"
+                "GlassWA: conversation overhaul toolbar=${toolbar != null} " +
+                    "composer=${editLayout != null} bubbles=$bubbles sheets=$sheets labels=$chips"
             )
         } catch (t: Throwable) {
-            XposedBridge.log("GlassWA: conversation glass failed: ${t.javaClass.simpleName}: ${t.message}")
+            XposedBridge.log("GlassWA: conversation overhaul failed: ${t.javaClass.simpleName}: ${t.message}")
         }
     }
 
@@ -122,47 +109,39 @@ class HookEntry : IXposedHookLoadPackage {
         window.statusBarColor = Color.TRANSPARENT
         window.navigationBarColor = Color.TRANSPARENT
         if (Build.VERSION.SDK_INT >= 30) {
-            val controller = window.insetsController
-            if (controller != null) {
-                // Keep WhatsApp's light/dark icon decision; GlassWA only makes
-                // the surfaces transparent so the glass layers can meet the bars.
-                controller.setSystemBarsAppearance(
-                    controller.systemBarsAppearance,
-                    android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or
-                        android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS
-                )
-            }
+            window.setDecorFitsSystemWindows(false)
         }
     }
 
     private fun styleWallpaper(view: View) {
-        if (Build.VERSION.SDK_INT >= 31 && view.getTag(TAG_WALLPAPER) != true) {
-            // RenderEffect operates on the View's RenderNode. Applying it to the
-            // wallpaper itself gives the translucent foreground surfaces a
-            // convincing frosted backdrop without expensive bitmap snapshots.
-            view.setRenderEffect(
-                RenderEffect.createBlurEffect(
-                    5.5f,
-                    5.5f,
-                    Shader.TileMode.CLAMP
-                )
-            )
-            view.setTag(TAG_WALLPAPER, true)
-        }
+        if (Build.VERSION.SDK_INT < 31 || view.getTag(TAG_WALLPAPER) == true) return
+        view.setRenderEffect(RenderEffect.createBlurEffect(4.0f, 4.0f, Shader.TileMode.CLAMP))
+        view.setTag(TAG_WALLPAPER, true)
     }
 
+    /** Style actual bubble containers without touching message content/views. */
     private fun styleBubbleCandidates(root: View, density: Float): Int {
         var count = 0
+        val screenWidth = root.resources.displayMetrics.widthPixels
+        val screenHeight = root.resources.displayMetrics.heightPixels
         walk(root) { view ->
             if (view.getTag(TAG_BUBBLE) == true) return@walk
-            val name = view.javaClass.name.lowercase()
-            if (!isBubbleClass(name)) return@walk
-            if (view.width <= 0 || view.height <= 0) return@walk
-            if (view === root) return@walk
+            if (view === root || view is TextView) return@walk
+            if (view.visibility != View.VISIBLE || view.width <= 0 || view.height <= 0) return@walk
 
-            // Do not replace a view's click/input semantics. We only replace
-            // its presentation background and outline.
-            view.background = bubbleGlassDrawable(isOutgoingCandidate(view))
+            val name = view.javaClass.name.lowercase()
+            val resource = resourceName(view).lowercase()
+            val semantic = isBubbleClass(name) || resource.contains("message_bubble") || resource.contains("bubble")
+            val geometry = view.width in (screenWidth * 0.25f).toInt()..(screenWidth * 0.90f).toInt() &&
+                view.height in (28 * density).toInt()..(210 * density).toInt() &&
+                view.top < screenHeight * 0.88f
+            if (!semantic && !geometry) return@walk
+            if (resource.contains("composer") || resource.contains("edit_layout")) return@walk
+
+            // Require a semantically named class for generic geometry matches;
+            // this keeps arbitrary message-row containers from becoming glass.
+            if (!semantic) return@walk
+            view.background = bubbleDrawable(isOutgoing(view))
             view.elevation = 2f * density
             view.outlineProvider = ViewOutlineProvider.BACKGROUND
             view.clipToOutline = true
@@ -173,87 +152,164 @@ class HookEntry : IXposedHookLoadPackage {
     }
 
     private fun isBubbleClass(name: String): Boolean {
-        return (name.contains("bubble") &&
-            (name.contains("message") || name.contains("conversation") || name.contains("chat"))) ||
-            name.contains("conversationmessageview") ||
-            name.contains("messagebubbleview")
+        return name.contains("messagebubble") ||
+            name.contains("conversationbubble") ||
+            name.contains("bubbleview") ||
+            (name.contains("bubble") && name.contains("message"))
     }
 
-    private fun isOutgoingCandidate(view: View): Boolean {
-        // Avoid content inspection. WhatsApp's own child/background hierarchy
-        // remains authoritative; this simply gives likely outgoing bubbles a
-        // slightly stronger accent when their existing background is non-null.
-        return view.background != null && view.background.alpha < 245
+    private fun isOutgoing(view: View): Boolean {
+        // Presentation-only heuristic: preserve WhatsApp's existing visual
+        // distinction by looking at the current background when available.
+        val alpha = view.background?.alpha ?: 255
+        return alpha < 250
     }
 
-    private fun applySurface(view: View, drawable: GradientDrawable, elevationDp: Float, density: Float) {
+    /**
+     * Find WhatsApp's attachment/media sheet without relying on an obfuscated
+     * resource ID. The sheet is a large bottom-anchored surface; the message
+     * list and composer do not satisfy this combination of constraints.
+     */
+    private fun styleBottomSheets(root: View, density: Float): Int {
+        var count = 0
+        val screenHeight = root.resources.displayMetrics.heightPixels
+        val screenWidth = root.resources.displayMetrics.widthPixels
+        walk(root) { view ->
+            if (view.getTag(TAG_SHEET) == true) return@walk
+            val group = view as? ViewGroup ?: return@walk
+            if (view.visibility != View.VISIBLE || view.width <= 0 || view.height <= 0) return@walk
+            if (view.width < screenWidth * 0.72f || view.height < screenHeight * 0.18f) return@walk
+            if (view.top < screenHeight * 0.48f) return@walk
+            if (view.height > screenHeight * 0.80f) return@walk
+
+            val name = view.javaClass.name.lowercase()
+            val resource = resourceName(view).lowercase()
+            val named = name.contains("bottomsheet") || name.contains("attachmentsheet") ||
+                name.contains("mediasheet") || name.contains("gallerypicker") ||
+                resource.contains("bottom_sheet") || resource.contains("attachment") ||
+                resource.contains("media_picker")
+            val populated = group.childCount >= 4
+            if (!named && !populated) return@walk
+            if (view === findByName(root, "com.whatsapp:id/footer")) return@walk
+
+            glassSurface(view, sheetDrawable(), 10f, density, TAG_SHEET)
+            styleSheetChildren(group, density)
+            count++
+        }
+        return count
+    }
+
+    private fun styleSheetChildren(sheet: ViewGroup, density: Float) {
+        for (i in 0 until sheet.childCount) {
+            val child = sheet.getChildAt(i)
+            if (child.getTag(TAG_CHIP) == true) continue
+            val h = child.height
+            val w = child.width
+            if (w > 55 * density && w < 190 * density && h > 38 * density && h < 110 * density) {
+                child.background = pillDrawable()
+                child.setTag(TAG_CHIP, true)
+                child.invalidate()
+            }
+        }
+    }
+
+    /** Style the day chip and encryption/info card as floating glass labels. */
+    private fun styleConversationLabels(root: View, density: Float): Int {
+        var count = 0
+        walk(root) { view ->
+            val textView = view as? TextView ?: return@walk
+            if (textView.getTag(TAG_LABEL) == true) return@walk
+            val text = textView.text?.toString()?.trim()?.lowercase() ?: return@walk
+            if (text == "today" || text == "yesterday" || text == "messages to yourself are end-to-end encrypted." ||
+                text.contains("messages to yourself are end-to-end encrypted")) {
+                val parent = textView.parent as? View ?: return@walk
+                if (parent.width <= 0 || parent.height <= 0) return@walk
+                parent.background = if (text == "today" || text == "yesterday") dayPillDrawable() else infoDrawable()
+                parent.elevation = 5f * density
+                parent.setTag(TAG_LABEL, true)
+                count++
+            }
+        }
+        return count
+    }
+
+    private fun glassSurface(view: View, drawable: GradientDrawable, elevationDp: Float, density: Float, tag: Int) {
+        if (view.getTag(tag) == true) return
         view.background = drawable
         if (elevationDp > 0f) view.elevation = elevationDp * density
         view.outlineProvider = ViewOutlineProvider.BACKGROUND
         view.clipToOutline = true
+        view.setTag(tag, true)
         view.invalidate()
     }
 
-    private fun composerGlassDrawable() = GradientDrawable().apply {
+    private fun composerDrawable() = GradientDrawable().apply {
         shape = GradientDrawable.RECTANGLE
-        cornerRadius = 30f
-        colors = intArrayOf(
-            Color.argb(178, 35, 42, 47),
-            Color.argb(150, 25, 31, 36)
-        )
+        cornerRadius = 32f
+        colors = intArrayOf(Color.argb(120, 48, 58, 63), Color.argb(88, 24, 31, 36))
         orientation = GradientDrawable.Orientation.TL_BR
-        setStroke(1, Color.argb(105, 255, 255, 255))
+        setStroke(1, Color.argb(115, 255, 255, 255))
     }
 
-    private fun toolbarGlassDrawable() = GradientDrawable().apply {
+    private fun toolbarDrawable() = GradientDrawable().apply {
         shape = GradientDrawable.RECTANGLE
-        colors = intArrayOf(
-            Color.argb(170, 28, 31, 35),
-            Color.argb(125, 20, 22, 25)
-        )
+        colors = intArrayOf(Color.argb(105, 24, 29, 33), Color.argb(70, 17, 21, 24))
+        orientation = GradientDrawable.Orientation.TOP_BOTTOM
+        setStroke(1, Color.argb(75, 255, 255, 255))
+    }
+
+    private fun innerDrawable() = GradientDrawable().apply {
+        shape = GradientDrawable.RECTANGLE
+        cornerRadius = 28f
+        setColor(Color.argb(28, 255, 255, 255))
+    }
+
+    private fun sheetDrawable() = GradientDrawable().apply {
+        shape = GradientDrawable.RECTANGLE
+        cornerRadii = floatArrayOf(28f, 28f, 28f, 28f, 0f, 0f, 0f, 0f)
+        colors = intArrayOf(Color.argb(215, 21, 27, 31), Color.argb(182, 16, 21, 25))
+        orientation = GradientDrawable.Orientation.TOP_BOTTOM
+        setStroke(1, Color.argb(100, 255, 255, 255))
+    }
+
+    private fun pillDrawable() = GradientDrawable().apply {
+        shape = GradientDrawable.RECTANGLE
+        cornerRadius = 28f
+        setColor(Color.argb(26, 255, 255, 255))
+        setStroke(1, Color.argb(65, 255, 255, 255))
+    }
+
+    private fun dayPillDrawable() = GradientDrawable().apply {
+        shape = GradientDrawable.RECTANGLE
+        cornerRadius = 40f
+        setColor(Color.argb(145, 25, 32, 37))
+        setStroke(1, Color.argb(75, 255, 255, 255))
+    }
+
+    private fun infoDrawable() = GradientDrawable().apply {
+        shape = GradientDrawable.RECTANGLE
+        cornerRadius = 22f
+        colors = intArrayOf(Color.argb(155, 28, 35, 40), Color.argb(120, 20, 26, 30))
         orientation = GradientDrawable.Orientation.TL_BR
-        setStroke(1, Color.argb(70, 255, 255, 255))
+        setStroke(1, Color.argb(65, 255, 255, 255))
     }
 
-    private fun innerGlassDrawable() = GradientDrawable().apply {
-        shape = GradientDrawable.RECTANGLE
-        cornerRadius = 24f
-        setColor(Color.argb(32, 255, 255, 255))
-    }
-
-    private fun bubbleGlassDrawable(outgoing: Boolean) = GradientDrawable().apply {
+    private fun bubbleDrawable(outgoing: Boolean) = GradientDrawable().apply {
         shape = GradientDrawable.RECTANGLE
         cornerRadius = 22f
         if (outgoing) {
-            colors = intArrayOf(
-                Color.argb(215, 215, 38, 115),
-                Color.argb(190, 164, 25, 96)
-            )
+            colors = intArrayOf(Color.argb(170, 232, 48, 125), Color.argb(135, 171, 32, 101))
         } else {
-            colors = intArrayOf(
-                Color.argb(175, 38, 45, 49),
-                Color.argb(145, 25, 31, 35)
-            )
+            colors = intArrayOf(Color.argb(112, 47, 57, 63), Color.argb(82, 27, 34, 39))
         }
         orientation = GradientDrawable.Orientation.TL_BR
-        setStroke(1, Color.argb(70, 255, 255, 255))
-    }
-
-    private fun conversationWashDrawable() = GradientDrawable().apply {
-        shape = GradientDrawable.RECTANGLE
-        colors = intArrayOf(
-            Color.argb(20, 255, 255, 255),
-            Color.argb(8, 255, 255, 255)
-        )
-        orientation = GradientDrawable.Orientation.TOP_BOTTOM
+        setStroke(1, Color.argb(75, 255, 255, 255))
     }
 
     private fun walk(root: View, visitor: (View) -> Unit) {
         visitor(root)
         if (root is ViewGroup) {
-            for (i in 0 until root.childCount) {
-                walk(root.getChildAt(i), visitor)
-            }
+            for (i in 0 until root.childCount) walk(root.getChildAt(i), visitor)
         }
     }
 
@@ -271,14 +327,23 @@ class HookEntry : IXposedHookLoadPackage {
         return null
     }
 
+    private fun resourceName(view: View): String {
+        if (view.id == View.NO_ID) return ""
+        return try { view.resources.getResourceName(view.id) } catch (_: Throwable) { "" }
+    }
+
     companion object {
         const val TARGET_PACKAGE = "com.whatsapp"
         const val CONVERSATION_ACTIVITY = "com.whatsapp.Conversation"
-        private const val TAG_STYLED = 0x47574101
-        private const val TAG_TOOLBAR = 0x47574102
-        private const val TAG_COMPOSER = 0x47574103
-        private const val TAG_WALLPAPER = 0x47574104
-        private const val TAG_BUBBLE = 0x47574105
-        @Volatile var isLoaded: Boolean = false
+        private const val TAG_TOOLBAR = 0x47574110
+        private const val TAG_COMPOSER = 0x47574111
+        private const val TAG_INPUT = 0x47574112
+        private const val TAG_FOOTER = 0x47574113
+        private const val TAG_WALLPAPER = 0x47574114
+        private const val TAG_BUBBLE = 0x47574115
+        private const val TAG_SHEET = 0x47574116
+        private const val TAG_CHIP = 0x47574117
+        private const val TAG_LABEL = 0x47574118
+        private const val TAG_LAYOUT = 0x47574119
     }
 }
