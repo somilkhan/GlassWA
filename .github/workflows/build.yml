@@ -31,17 +31,13 @@ jobs:
         run: |
           if [ -z "$KEYSTORE_BASE64" ]; then
             echo "ERROR: KEYSTORE_BASE64 is not available to this workflow."
-            echo "Check that it is a Repository secret under Settings > Secrets and variables > Actions."
             exit 1
           fi
           if ! printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/glasswa-release.jks"; then
             echo "ERROR: KEYSTORE_BASE64 is not valid Base64."
             exit 1
           fi
-          if [ ! -s "$RUNNER_TEMP/glasswa-release.jks" ]; then
-            echo "ERROR: decoded keystore is empty."
-            exit 1
-          fi
+          test -s "$RUNNER_TEMP/glasswa-release.jks"
       - name: Build signed APK
         env:
           GLASSWA_KEYSTORE_PATH: ${{ runner.temp }}/glasswa-release.jks
@@ -62,7 +58,10 @@ jobs:
           done
           test "$found" = 1
       - name: Verify signing certificate
-        run: "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --print-certs app/build/outputs/apk/debug/app-debug.apk
+        run: |
+          APKSIGNER="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner -print -quit)"
+          test -n "$APKSIGNER"
+          "$APKSIGNER" verify --print-certs app/build/outputs/apk/debug/app-debug.apk
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
