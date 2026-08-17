@@ -44,13 +44,11 @@ class HookEntry : IXposedHookLoadPackage {
                 if (v.visibility != View.VISIBLE || v.width <= 0 || v.height <= 0) return@walk
                 val id = resource(v).lowercase()
                 val cls = v.javaClass.name.lowercase()
-
                 when {
                     v is EditText -> { themeEdit(v); widgets++ }
                     v is ImageButton -> { themeImageButton(v, id, cls); widgets++ }
                     v is TextView -> { themeText(v, id, cls); text++ }
                 }
-
                 when {
                     isBubble(id, cls) -> { applySurface(v, GLASS_BUBBLE_OUT, GLASS_BUBBLE_IN, 20f, bubbleOutgoing(v)); surfaces++ }
                     isComposer(id, cls) -> { applySurface(v, GLASS_COMPOSER, GLASS_COMPOSER, 28f, false); surfaces++ }
@@ -71,9 +69,9 @@ class HookEntry : IXposedHookLoadPackage {
     private fun themeWindow(w: Window) {
         w.statusBarColor = BLACK
         w.navigationBarColor = BLACK
-        w.decorView.systemUiVisibility = w.decorView.systemUiVisibility
-            and View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR.inv()
-            and View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR.inv()
+        w.decorView.systemUiVisibility = w.decorView.systemUiVisibility and
+            View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR.inv() and
+            View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR.inv()
     }
 
     private fun themeText(v: TextView, id: String, cls: String) {
@@ -133,9 +131,8 @@ class HookEntry : IXposedHookLoadPackage {
         shape = GradientDrawable.RECTANGLE
         cornerRadius = radius
         setColor(fill)
-        setStroke(dpStroke(stroke), stroke)
+        setStroke(1, stroke)
     }
-    private fun dpStroke(@Suppress("UNUSED_PARAMETER") color: Int) = 1
     private fun walk(root: View, action: (View) -> Unit) {
         action(root)
         if (root is ViewGroup) for (i in 0 until root.childCount) walk(root.getChildAt(i), action)
